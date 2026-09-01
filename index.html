@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>捐血預約與報到管理系統</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- SweetAlert2 CSS (取代原生 alert) -->
+    <link href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+        .page-section { display: none; }
+        .page-section.active { display: block; }
+        .time-btn { width: calc(50% - 6px); margin-bottom: 8px; }
+        @media (min-width: 576px) { .time-btn { width: calc(25% - 6px); } }
+        .time-btn.disabled { pointer-events: none; opacity: 0.55; }
+        #reader { width: 100%; max-width: 480px; margin: 0 auto; border-radius: 8px; overflow: hidden; }
+        .loading-overlay { display: none; position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9999; justify-content:center; align-items:center; color:#fff; }
+        .card { border: none; border-radius: 12px; }
+        .step-badge { font-size: 0.9rem; padding: 4px 8px; border-radius: 4px; }
+        .field-error-msg { color: #dc3545; font-size: 0.85rem; margin-top: 4px; display: none; }
+    </style>
+</head>
+<body>
+
+<div id="loading" class="loading-overlay">
+    <div class="text-center">
+        <div class="spinner-border text-light mb-2" role="status"></div>
+        <div class="fw-bold" id="loadingText">雲端資料處理中...</div>
+    </div>
+</div>
+
+<div class="container py-4">
+    <ul class="nav nav-pills nav-fill bg-white p-2 rounded-3 shadow-sm mb-4">
+        <li class="nav-item">
+            <button class="nav-link active fw-bold" id="tab-booking" onclick="switchPage('booking')">🩸 捐血預約 (前台)</button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link fw-bold" id="tab-admin" onclick="switchPage('admin')">📷 報到與完成核銷 (後台)</button>
+        </li>
+    </ul>
+
+    <!-- 前台預約 -->
+    <div id="booking-section" class="page-section active">
+        <div class="card shadow-sm p-3 p-md-4">
+            <div class="border-bottom pb-3 mb-4">
+                <h3 class="fw-bold text-danger mb-1">線上捐血預約</h3>
+                <p class="text-muted mb-0">開放提前一日預約，報到時請出示 QR Code 供現場人員核對。</p>
+            </div>
+            
+            <form id="bookingForm" onsubmit="handleBooking(event)" novalidate>
+                <!-- 步驟 1：選擇日期、容量與時段 -->
+                <div class="bg-light p-3 rounded-3 mb-4 border">
+                    <h5 class="fw-bold mb-3 text-danger">
+                        <span class="badge bg-danger step-badge me-1">步驟 1</span> 選擇預約日期與時段
+                    </h5>
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">1-1. 選擇預約日期 <span class="text-danger">*</span></label>
+                            <input type="date" id="bookingDate" class="form-control" required onchange="fetchAndRenderSlots()">
+                            <div class="form-text">可選擇從「明天」開始的日期進行預約</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold">1-2. 選擇捐血量 <span class="text-danger">*</span></label>
+                            <select id="volume" class="form-select" required onchange="fetchAndRenderSlots()">
+                                <option value="250ml">250 ml (時段限額 3 人)</option>
+                                <option value="500ml">500 ml (時段限額 3 人)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="mt-3">
+                        <label class="form-label fw-bold">1-3. 選擇時段 <span class="text-danger">*</span></label>
+                        <div id="timeSlotsContainer" class="d-flex flex-wrap gap-2">
+                            <p class="text-muted mb-0">👈 請先選擇預約日期以查看各時段剩餘名額</p>
+                        </div>
+                        <div id="selectedSlotNotice" class="mt-2 text-success fw-bold" style="display: none;">
+                            ✓ 已選擇時段：<span id="selectedSlotText" class="fs-5"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 步驟 2：填寫個人資料 -->
+                <div id="userInfoSection" class="p-3 rounded-3 mb-4 border" style="opacity: 0.6; pointer-events: none;">
+                    <h5 class="fw-bold mb-3 text-secondary">
+                        <span class="badge bg-secondary step-badge me-1" id="step2Badge">步驟 2</span> 填寫個人基本資料
+                    </h5>
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label class="form-label">姓名 <span class="text-danger">*</span></label>
+                            <input type="text" id="name" class="form-control" required placeholder="請輸入姓名" disabled oninput="checkNameValidity(this)">
+                            <div id="nameError" class="field-error-msg">請輸入姓名</div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">電話 <span class="text-danger">*</span></label>
+                            <input type="tel" id="phone" class="form-control" maxlength="10" required placeholder="例如：0912345678" disabled oninput="validatePhoneInput(this)">
+                            <div id="phoneError" class="field-error-msg">請輸入完整的 10 位數電話號碼</div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">出生年月日 <span class="text-danger">*</span></label>
+                            <input type="text" id="dob" class="form-control" maxlength="10" required placeholder="YYYY/MM/DD (如: 1990/01/15)" disabled oninput="formatDOBInput(this)">
+                            <div id="dobError" class="field-error-msg">請輸入正確格式（例如：1990/01/15）</div>
+                        </div>
+                    </div>
+                </div>
+
+                <button type="submit" id="submitBtn" class="btn btn-danger btn-lg w-100 fw-bold" disabled>請先選擇預約時段</button>
+            </form>
+
+            <div id="qrResult" class="text-center mt-4 pt-4 border-top" style="display: none;">
+                <span class="badge bg-success-subtle text-success fs-6 px-3 py-2 mb-2">✓ 預約成功</span>
+                <h4 class="fw-bold">您的專屬報到 QR Code</h4>
+                <p class="text-muted mb-1">請將此頁面截圖保存。</p>
+                <p class="text-danger fw-bold">⚠️ 當天報到時請出示此條碼，供工作人員核對姓名與出生年月日。</p>
+                <div id="qrcode" class="d-flex justify-content-center my-3"></div>
+                <button class="btn btn-outline-secondary mt-2" onclick="resetForm()">填寫下一筆預約</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 後台管理 -->
+    <div id="admin-section" class="page-section">
+        <div class="card shadow-sm p-3 p-md-4">
+            <div class="d-flex justify-content-between align-items-center border-bottom pb-3 mb-4">
+                <div>
+                    <h3 class="fw-bold mb-1">雲端報到與完成核銷管理</h3>
+                    <p class="text-muted mb-0">資料與 Google 試算表即時同步連動</p>
+                </div>
+                <div>
+                    <button class="btn btn-outline-primary fw-bold me-2" onclick="loadAdminData()">🔄 重新整理名冊</button>
+                    <button class="btn btn-success fw-bold" onclick="exportToExcel()">📊 匯出 Excel</button>
+                </div>
+            </div>
+
+            <div class="text-center mb-4 bg-light p-3 rounded-3 border">
+                <h5 class="fw-bold mb-2">掃描 QR Code 辦理報到/結束核銷</h5>
+                <p class="text-muted small mb-3">可提早 20 分鐘報到｜超過 5 分鐘未報到視同失效</p>
+                <button id="startScanBtn" class="btn btn-primary fw-bold" onclick="startScanner()">開啟相機掃描 QR Code</button>
+                <button id="stopScanBtn" class="btn btn-outline-danger fw-bold d-none" onclick="stopScanner()">關閉相機</button>
+                <div id="reader" class="mt-3"></div>
+            </div>
+
+            <h5 class="fw-bold mb-3">雲端捐血紀錄名冊</h5>
+            <div class="table-responsive">
+                <table class="table table-hover align-middle border">
+                    <thead class="table-light">
+                        <tr>
+                            <th>姓名</th>
+                            <th>電話</th>
+                            <th>捐血量</th>
+                            <th>出生年月日</th>
+                            <th>預約日期</th>
+                            <th>預約時段</th>
+                            <th>報到時間</th>
+                            <th>結束時間</th>
+                            <th>目前狀態</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recordsTableBody">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://unpkg.com/html5-qrcode"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- SweetAlert2 套件 -->
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
+<script>
+// ⚠️ 請貼上您的 Apps Script 網址 (結尾為 /exec)
+const GAS_URL = "https://script.google.com/macros/s/你的_APPS_SCRIPT_網址_貼在這裡/exec";
+
+const TIME_SLOTS = [
+    "08:00-09:00", "09:00-10:00", "10:00-11:00", "11:00-12:00",
+    "13:00-14:00", "14:00-15:00", "15:00-16:00", "16:00-17:00"
+];
+
+const LIMITS = { "250ml": 3, "500ml": 3 };
+
+let selectedSlotStr = "";
+let html5QrCode = null;
+let cachedBookings = [];
+
+document.addEventListener("DOMContentLoaded", () => {
+    // 開放提前一日預約（明天）
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = tomorrow.toISOString().split('T')[0];
+    
+    const bookingDateInput = document.getElementById("bookingDate");
+    bookingDateInput.min = tomorrowStr;
+    bookingDateInput.value = tomorrowStr;
+});
+
+// 即時驗證姓名
+function checkNameValidity(input) {
+    const errorDiv = document.getElementById("nameError");
+    if (!input.value.trim()) {
+        input.classList.add("is-invalid");
+        errorDiv.style.display = "block";
+    } else {
+        input.classList.remove("is-invalid");
+        errorDiv.style.display = "none";
+    }
+}
+
+// 即時過濾與驗證電話欄位
+function validatePhoneInput(input) {
+    input.value = input.value.replace(/\D/g, '');
+    const errorDiv = document.getElementById("phoneError");
+    
+    if (input.value.length !== 10) {
+        input.classList.add("is-invalid");
+        errorDiv.style.display = "block";
+    } else {
+        input.classList.remove("is-invalid");
+        errorDiv.style.display = "none";
+    }
+}
+
+// 出生年月日 YYYY/MM/DD 自動格式化與即時驗證
+function formatDOBInput(input) {
+    let v = input.value.replace(/\D/g, '');
+    if (v.length > 8) v = v.substring(0, 8);
+
+    if (v.length > 4 && v.length <= 6) {
+        input.value = v.substring(0, 4) + '/' + v.substring(4);
+    } else if (v.length > 6) {
+        input.value = v.substring(0, 4) + '/' + v.substring(4, 6) + '/' + v.substring(6);
+    } else {
+        input.value = v;
+    }
+
+    const errorDiv = document.getElementById("dobError");
+    if (!isValidDOB(input.value)) {
+        input.classList.add("is-invalid");
+        errorDiv.style.display = "block";
+    } else {
+        input.classList.remove("is-invalid");
+        errorDiv.style.display = "none";
+    }
+}
+
+// 校驗出生年月日格式是否合法
+function isValidDOB(dobStr) {
+    const reg = /^\d{4}\/(0[1-9]|1[0-2])\/(0[1-9]|[12]\d|3[01])$/;
+    if (!reg.test(dobStr)) return false;
+
+    const parts = dobStr.split('/');
+    const year = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10) - 1;
+    const day = parseInt(parts[2], 10);
+
+    const dateObj = new Date(year, month, day);
+    return dateObj.getFullYear() === year && dateObj.getMonth() === month && dateObj.getDate() === day;
+}
+
+function showLoading(text = "雲端資料處理中...") {
+    document.getElementById("loadingText").innerText = text;
+    document.getElementById("loading").style.display = "flex";
+}
+function hideLoading() {
+    document.getElementById("loading").style.display = "none";
+}
+
+function switchPage(page) {
+    document.querySelectorAll('.nav-link').forEach(btn => btn.classList.remove('active'));
+    document.querySelectorAll('.page-section').forEach(sec => sec.classList.remove('active'));
+    
+    if(page === 'booking') {
+        document.getElementById('tab-booking').classList.add('active');
+        document.getElementById('booking-section').classList.add('active');
+        stopScanner();
+    } else {
+        document.getElementById('tab-admin').classList.add('active');
+        document.getElementById('admin-section').classList.add('active');
+        loadAdminData();
+    }
+}
+
+function fetchSheetData() {
+    return new Promise((resolve) => {
+        const callbackName = 'jsonp_cb_' + Date.now();
+        const script = document.createElement('script');
+        
+        window[callbackName] = function(data) {
+            delete window[callbackName];
+            if (document.body.contains(script)) document.body.removeChild(script);
+            cachedBookings = data || [];
+            resolve(cachedBookings);
+        };
+
+        script.src = `${GAS_URL}?callback=${callbackName}&t=${Date.now()}`;
+        script.onerror = function() {
+            delete window[callbackName];
+            if (document.body.contains(script)) document.body.removeChild(script);
+            Swal.fire({
+                icon: 'error',
+                title: '連線失敗',
+                text: '無法讀取資料，請確認 Apps Script 網址設定正確。'
+            });
+            resolve([]);
+        };
+
+        document.body.appendChild(script);
+    });
+}
+
+async function fetchAndRenderSlots() {
+    const date = document.getElementById("bookingDate").value;
+    const volume = document.getElementById("volume").value;
+    if (!date) return;
+
+    selectedSlotStr = "";
+    resetStep2();
+
+    const maxLimit = LIMITS[volume] || 3;
+
+    showLoading(`查詢 ${date} (${volume}) 剩餘名額中...`);
+    const bookings = await fetchSheetData();
+    hideLoading();
+
+    const container = document.getElementById("timeSlotsContainer");
+    container.innerHTML = "";
+
+    TIME_SLOTS.forEach(slot => {
+        const count = bookings.filter(b => b.date === date && b.volume === volume && b.slot === slot && b.status !== '已失效').length;
+        const isFull = count >= maxLimit;
+
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = `btn ${isFull ? 'btn-secondary disabled' : 'btn-outline-danger'} time-btn`;
+        btn.innerHTML = `${slot}<br><small>(${volume}: ${count}/${maxLimit}人)</small>`;
+        
+        if (isFull) {
+            btn.innerHTML += `<br><small class="fw-bold">已額滿</small>`;
+            btn.disabled = true;
+        } else {
+            btn.onclick = () => {
+                document.querySelectorAll('.time-btn').forEach(b => {
+                    if(!b.classList.contains('btn-secondary')) b.className = 'btn btn-outline-danger time-btn';
+                });
+                btn.className = 'btn btn-danger time-btn';
+                selectedSlotStr = slot;
+                unlockStep2(slot);
+            };
+        }
+        container.appendChild(btn);
+    });
+}
+
+function unlockStep2(slot) {
+    document.getElementById("selectedSlotNotice").style.display = "block";
+    document.getElementById("selectedSlotText").innerText = slot;
+
+    const userInfoSection = document.getElementById("userInfoSection");
+    userInfoSection.style.opacity = "1";
+    userInfoSection.style.pointerEvents = "auto";
+    
+    document.getElementById("step2Badge").className = "badge bg-primary step-badge me-1";
+
+    document.getElementById("name").disabled = false;
+    document.getElementById("phone").disabled = false;
+    document.getElementById("dob").disabled = false;
+
+    const submitBtn = document.getElementById("submitBtn");
+    submitBtn.disabled = false;
+    submitBtn.innerText = "確認預約並產生 QR Code";
+}
+
+function resetStep2() {
+    document.getElementById("selectedSlotNotice").style.display = "none";
+    
+    const userInfoSection = document.getElementById("userInfoSection");
+    userInfoSection.style.opacity = "0.6";
+    userInfoSection.style.pointerEvents = "none";
+
+    document.getElementById("step2Badge").className = "badge bg-secondary step-badge me-1";
+
+    const nameInput = document.getElementById("name");
+    const phoneInput = document.getElementById("phone");
+    const dobInput = document.getElementById("dob");
+
+    nameInput.disabled = true;
+    phoneInput.disabled = true;
+    dobInput.disabled = true;
+
+    nameInput.classList.remove("is-invalid");
+    phoneInput.classList.remove("is-invalid");
+    dobInput.classList.remove("is-invalid");
+
+    document.getElementById("nameError").style.display = "none";
+    document.getElementById("phoneError").style.display = "none";
+    document.getElementById("dobError").style.display = "none";
+
+    const submitBtn = document.getElementById("submitBtn");
+    submitBtn.disabled = true;
+    submitBtn.innerText = "請先選擇預約時段";
+}
+
+async function handleBooking(e) {
+    e.preventDefault();
+    if (!selectedSlotStr) {
+        Swal.fire({ icon: 'warning', title: '提醒', text: '請先選擇預約時段！' });
+        return;
+    }
+
+    const nameVal = document.getElementById("name").value.trim();
+    const phoneVal = document.getElementById("phone").value.trim();
+    const dobVal = document.getElementById("dob").value.trim();
+
+    // 格式全面檢查
+    let hasError = false;
+
+    if (!nameVal) {
+        document.getElementById("name").classList.add("is-invalid");
+        document.getElementById("nameError").style.display = "block";
+        hasError = true;
+    }
+
+    if (phoneVal.length !== 10) {
+        document.getElementById("phone").classList.add("is-invalid");
+        document.getElementById("phoneError").style.display = "block";
+        hasError = true;
+    }
+
+    if (!isValidDOB(dobVal)) {
+        document.getElementById("dob").classList.add("is-invalid");
+        document.getElementById("dobError").style.display = "block";
+        hasError = true;
+    }
+
+    if (hasError) {
+        Swal.fire({
+            icon: 'error',
+            title: '欄位格式錯誤',
+            text: '請修正標紅色的欄位內容後再試一次！'
+        });
+        return;
+    }
+
+    const newBooking = {
+        name: nameVal,
+        phone: phoneVal,
+        volume: document.getElementById("volume").value,
+        dob: dobVal,
+        date: document.getElementById("bookingDate").value,
+        slot: selectedSlotStr
+    };
+
+    showLoading("預約資料寫入中...");
+
+    try {
+        await fetch(GAS_URL, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify({ action: "create", data: newBooking })
+        });
+
+        const qrKey = `${phoneVal}_${dobVal}`;
+
+        document.getElementById("qrcode").innerHTML = "";
+        new QRCode(document.getElementById("qrcode"), {
+            text: qrKey,
+            width: 180,
+            height: 180
+        });
+
+        document.getElementById("qrResult").style.display = "block";
+        document.getElementById("submitBtn").disabled = true;
+        document.getElementById("qrResult").scrollIntoView({ behavior: 'smooth' });
+
+        Swal.fire({
+            icon: 'success',
+            title: '預約成功！',
+            text: '專屬 QR Code 已產生，請將畫面截圖保存。'
+        });
+    } catch (err) {
+        Swal.fire({ icon: 'success', title: '預約已送出', text: '請查看頁面下方的 QR Code。' });
+    } finally {
+        hideLoading();
+    }
+}
+
+function resetForm() {
+    document.getElementById("bookingForm").reset();
+    resetStep2();
+    document.getElementById("qrResult").style.display = "none";
+    document.getElementById("timeSlotsContainer").innerHTML = '<p class="text-muted mb-0">👈 請先選擇預約日期以查看各時段剩餘名額</p>';
+}
+
+function startScanner() {
+    document.getElementById("startScanBtn").classList.add("d-none");
+    document.getElementById("stopScanBtn").classList.remove("d-none");
+
+    html5QrCode = new Html5Qrcode("reader");
+    html5QrCode.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 220, height: 220 } },
+        (decodedText) => {
+            processScan(decodedText);
+            stopScanner();
+        },
+        () => {}
+    ).catch(err => {
+        Swal.fire({ icon: 'error', title: '無法開啟相機', text: String(err) });
+        stopScanner();
+    });
+}
+
+function stopScanner() {
+    if (html5QrCode) {
+        html5QrCode.stop().then(() => {
+            html5QrCode.clear();
+            html5QrCode = null;
+            document.getElementById("startScanBtn").classList.remove("d-none");
+            document.getElementById("stopScanBtn").classList.add("d-none");
+        }).catch(err => console.log(err));
+    }
+}
+
+async function processScan(scannedKey) {
+    showLoading("驗證報到時間與身分資料中...");
+
+    try {
+        const response = await fetch(GAS_URL, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify({ action: "scan", qrKey: scannedKey })
+        });
+        
+        const resData = await response.json();
+        
+        let iconType = 'info';
+        if (resData.status === 'success') iconType = 'success';
+        if (resData.status === 'warning') iconType = 'warning';
+        if (resData.status === 'error') iconType = 'error';
+
+        Swal.fire({
+            icon: iconType,
+            title: '掃描核銷結果',
+            html: `<div style="white-space: pre-line; text-align: left; font-size: 1.1rem; line-height: 1.6;">${resData.message}</div>`,
+            confirmButtonText: '確定'
+        });
+    } catch (err) {
+        Swal.fire({ icon: 'info', title: '掃描完成', text: '指令已發送，更新資料中...' });
+    } finally {
+        hideLoading();
+        setTimeout(() => {
+            loadAdminData();
+        }, 1000);
+    }
+}
+
+async function loadAdminData() {
+    showLoading("更新試算表名冊中...");
+    const bookings = await fetchSheetData();
+    hideLoading();
+
+    const tbody = document.getElementById("recordsTableBody");
+    tbody.innerHTML = "";
+
+    if (!bookings || bookings.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted py-3">目前無預約紀錄</td></tr>`;
+        return;
+    }
+
+    bookings.forEach(b => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td class="fw-bold">${b.name}</td>
+            <td>${b.phone}</td>
+            <td><span class="badge bg-danger">${b.volume}</span></td>
+            <td>${b.dob}</td>
+            <td>${b.date}</td>
+            <td><span class="badge bg-light text-dark border">${b.slot}</span></td>
+            <td><strong class="text-primary">${b.startTime || '-'}</strong></td>
+            <td><strong class="text-success">${b.endTime || '-'}</strong></td>
+            <td><span class="badge ${getStatusBadge(b.status)}">${b.status}</span></td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+function getStatusBadge(status) {
+    switch (status) {
+        case '已預約': return 'bg-secondary';
+        case '已報到': return 'bg-warning text-dark';
+        case '已完成': return 'bg-success';
+        case '已失效': return 'bg-danger';
+        default: return 'bg-secondary';
+    }
+}
+
+function exportToExcel() {
+    if (cachedBookings.length === 0) {
+        Swal.fire({ icon: 'warning', title: '無資料', text: '目前無資料可供匯出！' });
+        return;
+    }
+
+    const worksheet = XLSX.utils.json_to_sheet(cachedBookings);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "捐血紀錄名冊");
+    XLSX.writeFile(workbook, `捐血名冊紀錄_${new Date().toISOString().split('T')[0]}.xlsx`);
+}
+</script>
+
+</body>
+</html>
